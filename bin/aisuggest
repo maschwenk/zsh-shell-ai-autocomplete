@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+"""
+aisuggest - AI-powered shell suggestion client
+
+Reads a JSON payload from stdin, queries llama-server, and outputs
+a safe suffix suggestion.
+"""
+
+import sys
+import json
+import os
+import re
+import time
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
+from pathlib import Path
+
+# Configuration
+SCRIPT_DIR = Path(__file__).parent.resolve()
+PROJECT_DIR = SCRIPT_DIR.parent
+PROMPT_FILE = PROJECT_DIR / "config" / "prompt.txt"
+HOST = os.environ.get("SUGGESTD_HOST", "127.0.0.1")
+PORT = int(os.environ.get("SUGGESTD_PORT", "11435"))
+TIMEOUT = float(os.environ.get("AISUGGEST_TIMEOUT", "0.5"))  # 500ms default
+DEBUG = os.environ.get("DEBUG", "0") == "1"
+
+# Dangerous patterns that should not be suggested unless already in buffer
+DANGEROUS_PATTERNS = [
+    # Destructive file operations
+    r'\brm\s+-[rf]+',
+    r'\brm\s+-[fr]+',
+    r'\brm\s+.*\*',
+    r'\brm\s+.*~',
+    r'\brm\s+.*/',
+    r'\bdd\b',
+    r'\bmkfs\b',
+    r'\bshred\b',
+
+    # Dangerous sudo
+    r'sudo\s+rm',
+    r'sudo\s+dd',
+
+    # System control
+    r'\bshutdown\b',
+    r'\breboot\b',
+    r'\bhalt\b',
+    r'\bpoweroff\b',
+
+    # Pipe to shell
+    r'\|\s*sh\b',
+    r'\|\s*bash\b',
+    r'curl.*\|',
+    r'wget.*\|',
+
+    # Fork bomb
+    r':\(\)',
+
+    # Dangerous permissions
+    r'chmod\s+777',
+    r'chmod\s+-R\s+777',
+
+    # Force operations
+    r'git\s+push\s+.*--force',
+    r'git\s+push\s+.*-f\b',
+    r'git\s+clean\s+.*-[dfx]+',
+    r'docker\s+rm\s+.*-f',
+
+    # Mass deletion
+    r'kubectl\s+delete',
+    r'terraform\s+destroy',
+]
+
+
+def log_debug(msg):
+    """Log debug message to stderr if DEBUG=1"""
+    if DEBUG:
+        print(f"[aisuggest DEBUG] {msg}", file=sys.stderr)
+
+
+def load_system_prompt():
+    """Load the system prompt from config file"""
+    try:
+        with open(PROMPT_FILE, 'r') as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        log_debug(f"Prompt file not found: {PROMPT_FILE}")
+        return "You are a shell autosuggestion engine. Output ONLY the continuation suffix. No prose."
+
+
+def build_prompt(buffer, cwd, history, aliases):
+    """Build the full prompt for the model using a simple completion format"""
+    # Use a minimal, direct pattern that's easier for small models
+    # Just show a few examples and let the model complete the pattern
+
+    prompt = """Complete the shell command suffix:
+
+git st -> atus
+cd ~/Doc -> uments
+ls -l -> a
+docker p -> s
+npm i -> nstall
+kubectl g -> et
+
+"""
+
+    # Add history context if available (helps with personalization)
+    if history:
+        recent = history[-3:]
+        for cmd in recent:
+            prompt += f"{cmd}\n"
+        prompt += "\n"
+
+    # Add the actual completion request
+    prompt += f"{buffer} ->"
+
+    return prompt
+
+
+def call_llama_server(prompt, max_tokens=16, temperature=0.3):
+    """Call llama-server completion API"""
+    url = f"http://{HOST}:{PORT}/completion"
+
+    payload = {
+        "prompt": prompt,
+        "n_predict": max_tokens,
+        "temperature": temperature,
+        "top_p": 0.95,
+        "top_k": 50,
+        "repeat_penalty": 1.1,
+        "stop": ["\n", "\r", "\n\n"],
+        "stream": False,
+    }
+
+    data = json.dumps(payload).encode('utf-8')
+    req = Request(url, data=data, headers={'Content-Type': 'application/json'})
+
+    try:
+        t0 = time.time()
+        with urlopen(req, timeout=TIMEOUT) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            t1 = time.time()
+
+            completion = result.get('content', '').strip()
+            log_debug(f"Latency: {(t1-t0)*1000:.0f}ms, Completion: {repr(completion)}")
+
+            return completion
+    except (URLError, HTTPError) as e:
+        log_debug(f"HTTP error: {e}")
+        return None
+    except Exception as e:
+        log_debug(f"Unexpected error: {e}")
+        return None
+
+
+def contains_control_chars(text):
+    """Check if text contains control characters (except space/tab)"""
+    for c in text:
+        code = ord(c)
+        if code < 32 and c not in [' ', '\t']:
+            return True
+    return False
+
+
+def contains_dangerous_pattern(full_command, buffer):
+    """Check if full command contains dangerous patterns not in buffer"""
+    for pattern in DANGEROUS_PATTERNS:
+        if re.search(pattern, full_command, re.IGNORECASE):
+            # Check if the dangerous pattern was already in the buffer
+            if not re.search(pattern, buffer, re.IGNORECASE):
+                log_debug(f"Rejected: dangerous pattern '{pattern}' not in buffer")
+                return True
+    return False
+
+
+def normalize_suggestion(buffer, suggestion):
+    """Normalize and validate the suggestion"""
+    if not suggestion:
+        return None
+
+    # Remove newlines/carriage returns
+    if '\n' in suggestion or '\r' in suggestion:
+        log_debug("Rejected: contains newline")
+        return None
+
+    # Check for control characters
+    if contains_control_chars(suggestion):
+        log_debug("Rejected: contains control characters")
+        return None
+
+    # If model returned the full command, try to extract just the suffix
+    if suggestion.startswith(buffer):
+        suggestion = suggestion[len(buffer):]
+        log_debug(f"Extracted suffix: {repr(suggestion)}")
+
+    # Strip leading whitespace unless buffer ends with whitespace
+    if buffer and not buffer[-1].isspace():
+        suggestion = suggestion.lstrip()
+
+    # Check if resulting suggestion is empty or just whitespace
+    if not suggestion or not suggestion.strip():
+        return None
+
+    return suggestion
+
+
+def is_safe_suggestion(buffer, suggestion):
+    """Apply safety filters to the suggestion"""
+    if not suggestion:
+        return False
+
+    full_command = buffer + suggestion
+
+    # Check for dangerous patterns
+    if contains_dangerous_pattern(full_command, buffer):
+        return False
+
+    # Prevent suggesting dangerous pipes if not already in buffer
+    if '|' in suggestion and '|' not in buffer:
+        # Check if it's piping to a shell
+        if re.search(r'\|\s*(sh|bash|zsh|fish)\b', suggestion):
+            log_debug("Rejected: pipe to shell not in buffer")
+            return False
+
+    # Prevent suggesting sudo if not already in buffer
+    if 'sudo' in suggestion.lower() and 'sudo' not in buffer.lower():
+        log_debug("Rejected: sudo not in buffer")
+        return False
+
+    return True
+
+
+def main():
+    """Main entry point"""
+    try:
+        # Read JSON input from stdin
+        input_data = json.loads(sys.stdin.read())
+
+        buffer = input_data.get('buffer', '')
+        cwd = input_data.get('cwd', os.getcwd())
+        history = input_data.get('history', [])
+        aliases = input_data.get('aliases', {})
+        max_tokens = input_data.get('max_tokens', 16)
+
+        log_debug(f"Buffer: {repr(buffer)}, CWD: {cwd}")
+
+        # Don't suggest for empty or very short buffers
+        if len(buffer.strip()) < 2:
+            log_debug("Buffer too short")
+            sys.exit(0)
+
+        # Build prompt
+        prompt = build_prompt(buffer, cwd, history, aliases)
+
+        log_debug(f"Prompt length: {len(prompt)} chars")
+
+        # Call llama-server
+        suggestion = call_llama_server(prompt, max_tokens=max_tokens)
+
+        if not suggestion:
+            log_debug("No suggestion from model")
+            sys.exit(0)
+
+        # Normalize and validate
+        suggestion = normalize_suggestion(buffer, suggestion)
+        if not suggestion:
+            log_debug("Suggestion rejected during normalization")
+            sys.exit(0)
+
+        # Apply safety filters
+        if not is_safe_suggestion(buffer, suggestion):
+            log_debug("Suggestion rejected by safety filter")
+            sys.exit(0)
+
+        # Output only the suffix (no newline at the end unless explicitly requested)
+        print(suggestion, end='')
+
+    except json.JSONDecodeError as e:
+        log_debug(f"Invalid JSON input: {e}")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception as e:
+        log_debug(f"Unexpected error: {e}")
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

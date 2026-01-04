@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+# suggestd - Start/stop llama-server daemon for AI shell suggestions
+
+set -euo pipefail
+
+# Configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+MODEL_PATH="${MODEL_PATH:-$PROJECT_DIR/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf}"
+HOST="${SUGGESTD_HOST:-127.0.0.1}"
+PORT="${SUGGESTD_PORT:-11435}"
+CTX_SIZE="${SUGGESTD_CTX_SIZE:-256}"
+PARALLEL="${SUGGESTD_PARALLEL:-1}"
+THREADS="${SUGGESTD_THREADS:-6}"
+MAX_TOKENS="${SUGGESTD_MAX_TOKENS:-24}"
+PID_FILE="${SUGGESTD_PID_FILE:-$PROJECT_DIR/.suggestd.pid}"
+LOG_FILE="${SUGGESTD_LOG_FILE:-$PROJECT_DIR/.suggestd.log}"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+log_info() {
+    echo -e "${GREEN}[suggestd]${NC} $*"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[suggestd]${NC} $*" >&2
+}
+
+log_error() {
+    echo -e "${RED}[suggestd]${NC} $*" >&2
+}
+
+check_llama_server() {
+    if ! command -v llama-server &> /dev/null; then
+        log_error "llama-server not found in PATH"
+        log_error "Install via: brew install llama.cpp"
+        log_error "Or build from source: https://github.com/ggerganov/llama.cpp"
+        return 1
+    fi
+    return 0
+}
+
+check_model() {
+    if [[ ! -f "$MODEL_PATH" ]]; then
+        log_error "Model file not found: $MODEL_PATH"
+        log_error ""
+        log_error "Please download a model:"
+        log_error "  mkdir -p $PROJECT_DIR/models"
+        log_error "  cd $PROJECT_DIR/models"
+        log_error "  # Download from HuggingFace, e.g.:"
+        log_error "  wget https://huggingface.co/..."
+        return 1
+    fi
+    log_info "Using model: $MODEL_PATH"
+    return 0
+}
+
+is_running() {
+    if [[ -f "$PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$PID_FILE")
+        if ps -p "$pid" > /dev/null 2>&1; then
+            return 0
+        else
+            rm -f "$PID_FILE"
+        fi
+    fi
+    return 1
+}
+
+start_daemon() {
+    if is_running; then
+        log_warn "Daemon already running (PID: $(cat "$PID_FILE"))"
+        return 1
+    fi
+
+    check_llama_server || return 1
+    check_model || return 1
+
+    log_info "Starting llama-server on $HOST:$PORT"
+    log_info "Context size: $CTX_SIZE, Max tokens: $MAX_TOKENS"
+    log_info "Logs: $LOG_FILE"
+
+    # Start llama-server with optimized flags for low memory usage
+    nohup llama-server \
+        --host "$HOST" \
+        --port "$PORT" \
+        -m "$MODEL_PATH" \
+        --ctx-size "$CTX_SIZE" \
+        --parallel "$PARALLEL" \
+        --threads "$THREADS" \
+        --n-gpu-layers 99 \
+        --mmap \
+        --no-webui \
+        --log-disable \
+        > "$LOG_FILE" 2>&1 &
+
+    local pid=$!
+    echo "$pid" > "$PID_FILE"
+
+    # Wait a moment and check if it started successfully
+    sleep 2
+    if is_running; then
+        log_info "Daemon started successfully (PID: $pid)"
+
+        # Wait for server to be ready
+        log_info "Waiting for server to be ready..."
+        local max_attempts=10
+        local attempt=0
+        while [[ $attempt -lt $max_attempts ]]; do
+            if curl -s "http://$HOST:$PORT/health" > /dev/null 2>&1; then
+                log_info "Server is ready!"
+                return 0
+            fi
+            ((attempt++))
+            sleep 1
+        done
+        log_warn "Server started but health check failed. Check logs: $LOG_FILE"
+        return 0
+    else
+        log_error "Failed to start daemon. Check logs: $LOG_FILE"
+        rm -f "$PID_FILE"
+        return 1
+    fi
+}
+
+stop_daemon() {
+    if ! is_running; then
+        log_warn "Daemon is not running"
+        return 1
+    fi
+
+    local pid
+    pid=$(cat "$PID_FILE")
+    log_info "Stopping daemon (PID: $pid)"
+
+    kill "$pid" 2>/dev/null || true
+
+    # Wait for process to stop
+    local max_attempts=10
+    local attempt=0
+    while [[ $attempt -lt $max_attempts ]]; do
+        if ! ps -p "$pid" > /dev/null 2>&1; then
+            rm -f "$PID_FILE"
+            log_info "Daemon stopped"
+            return 0
+        fi
+        ((attempt++))
+        sleep 1
+    done
+
+    # Force kill if still running
+    log_warn "Force killing daemon"
+    kill -9 "$pid" 2>/dev/null || true
+    rm -f "$PID_FILE"
+    return 0
+}
+
+status_daemon() {
+    if is_running; then
+        local pid
+        pid=$(cat "$PID_FILE")
+        log_info "Daemon is running (PID: $pid)"
+
+        # Try to get memory usage
+        if command -v ps &> /dev/null; then
+            local rss
+            rss=$(ps -o rss= -p "$pid" 2>/dev/null || echo "unknown")
+            if [[ "$rss" != "unknown" ]]; then
+                local rss_mb=$((rss / 1024))
+                log_info "Memory usage: ${rss_mb}MB"
+            fi
+        fi
+
+        # Check if server responds
+        if curl -s "http://$HOST:$PORT/health" > /dev/null 2>&1; then
+            log_info "Server responding at http://$HOST:$PORT"
+        else
+            log_warn "Server not responding (may still be starting up)"
+        fi
+        return 0
+    else
+        log_info "Daemon is not running"
+        return 1
+    fi
+}
+
+restart_daemon() {
+    log_info "Restarting daemon"
+    stop_daemon || true
+    sleep 1
+    start_daemon
+}
+
+show_logs() {
+    if [[ -f "$LOG_FILE" ]]; then
+        tail -f "$LOG_FILE"
+    else
+        log_error "Log file not found: $LOG_FILE"
+        return 1
+    fi
+}
+
+usage() {
+    cat << EOF
+Usage: suggestd [COMMAND]
+
+Commands:
+    start       Start the daemon
+    stop        Stop the daemon
+    restart     Restart the daemon
+    status      Show daemon status
+    logs        Tail the log file
+
+Environment variables:
+    MODEL_PATH          Path to GGUF model file
+    SUGGESTD_HOST       Bind address (default: 127.0.0.1)
+    SUGGESTD_PORT       Port number (default: 11435)
+    SUGGESTD_CTX_SIZE   Context size (default: 256)
+    SUGGESTD_THREADS    Thread count (default: 6)
+    SUGGESTD_MAX_TOKENS Max tokens per completion (default: 24)
+
+Example:
+    MODEL_PATH=./models/my-model.gguf suggestd start
+EOF
+}
+
+# Main command dispatcher
+case "${1:-}" in
+    start)
+        start_daemon
+        ;;
+    stop)
+        stop_daemon
+        ;;
+    restart)
+        restart_daemon
+        ;;
+    status)
+        status_daemon
+        ;;
+    logs)
+        show_logs
+        ;;
+    ""|--help|-h)
+        usage
+        ;;
+    *)
+        log_error "Unknown command: $1"
+        usage
+        exit 1
+        ;;
+esac

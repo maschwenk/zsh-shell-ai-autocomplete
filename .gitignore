@@ -1,0 +1,39 @@
+# Model files (large GGUF files)
+models/*.gguf
+models/*.bin
+
+# Daemon files
+.suggestd.pid
+.suggestd.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
+
+# Test files
+test_*.sh
+test_*.py
