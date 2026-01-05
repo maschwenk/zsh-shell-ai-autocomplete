@@ -44,57 +44,16 @@ _zsh_autosuggest_strategy_ai() {
         return
     fi
 
-    # Collect recent history
-    # Use fc to get last N commands, excluding the current line
-    history_lines=("${(@f)$(fc -ln -$ZSH_AUTOSUGGEST_AI_HISTORY_SIZE | sed 's/^[[:space:]]*//')}")
-
-    # Collect command aliases
-    # Get all aliases and format them for JSON
-    local alias_name alias_value
-    for alias_name in ${(k)aliases}; do
-        alias_value="${aliases[$alias_name]}"
-        aliases_map[$alias_name]="$alias_value"
-    done
-
     # Build JSON payload
     # We need to properly escape strings for JSON
     local buffer_json=$(printf '%s' "$buffer" | python3 -c 'import json, sys; print(json.dumps(sys.stdin.read().rstrip("\n")))')
     local cwd_json=$(printf '%s' "$PWD" | python3 -c 'import json, sys; print(json.dumps(sys.stdin.read().rstrip("\n")))')
-
-    # Build history array
-    local history_json="[]"
-    if (( ${#history_lines[@]} > 0 )); then
-        # Use python to properly escape and format history array
-        history_json=$(printf '%s\n' "${history_lines[@]}" | python3 -c '
-import json, sys
-lines = [line.rstrip() for line in sys.stdin if line.strip()]
-print(json.dumps(lines[-20:]))  # Last 20 items
-')
-    fi
-
-    # Build aliases object
-    local aliases_json="{}"
-    if (( ${#aliases_map[@]} > 0 )); then
-        # Use python to build aliases JSON
-        aliases_json=$(python3 -c "
-import json, sys
-aliases = {}
-$(for alias_name in ${(k)aliases_map}; do
-    printf 'aliases[%s] = %s\n' \
-        "$(printf '%s' "$alias_name" | python3 -c 'import json, sys; print(json.dumps(sys.stdin.read().rstrip("\n")))')" \
-        "$(printf '%s' "${aliases_map[$alias_name]}" | python3 -c 'import json, sys; print(json.dumps(sys.stdin.read().rstrip("\n")))')"
-done)
-print(json.dumps(aliases))
-" 2>/dev/null) || aliases_json="{}"
-    fi
 
     # Build complete JSON input
     json_input=$(cat <<EOF
 {
   "buffer": $buffer_json,
   "cwd": $cwd_json,
-  "history": $history_json,
-  "aliases": $aliases_json,
   "max_tokens": $ZSH_AUTOSUGGEST_AI_MAX_TOKENS
 }
 EOF
