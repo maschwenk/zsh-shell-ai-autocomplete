@@ -87,7 +87,7 @@ def load_system_prompt():
         return "You are a shell autosuggestion engine. Output ONLY the continuation suffix. No prose."
 
 
-def build_prompt(buffer, cwd, history, aliases):
+def build_prompt(buffer, cwd, aliases):
     """Build the full prompt for the model using a simple completion format"""
     # Use a minimal, direct pattern that's easier for small models
     # Just show a few examples and let the model complete the pattern
@@ -114,19 +114,55 @@ Buffer: "docker ps"
 Correct output: " -a"
 Wrong: "docker ps -a" (don't repeat buffer)
 
+Buffer: "pnpm -F"
+Correct output: " weaver test"
+Wrong: "pnpm weaver test" (don't repeat buffer)
+
 Output format: Raw text only, no quotes, no explanations, just the suffix.
 """
 
-    # Add history context if available (helps with personalization)
-    if history:
-        recent = history[-3:]
-        for cmd in recent:
-            prompt += f"{cmd}\n"
-        prompt += "\n"
+    # Add history context from ~/.zsh_history (helps with personalization)
+    try:
+        zsh_history_path = os.path.expanduser("~/.zsh_history")
+        if os.path.exists(zsh_history_path):
+            with open(zsh_history_path, 'r', encoding='utf-8', errors='ignore') as f:
+                # Read all lines and take the last 1000
+                lines = f.readlines()[-1000:]
+
+            # Parse commands from zsh history format: ":timestamp:duration;command"
+            commands = []
+            for line in lines:
+                line = line.strip()
+                if line and ';' in line:
+                    # Extract command part (everything after first semicolon)
+                    command = line.split(';', 1)[1]
+                    if command.strip():
+                        commands.append(command)
+
+            # Deduplicate commands while preserving recency (keep most recent occurrence)
+            seen = set()
+            unique_commands = []
+            # Iterate in reverse order (most recent first) to keep latest occurrence
+            for cmd in commands:
+                if cmd not in seen:
+                    seen.add(cmd)
+                    unique_commands.append(cmd)
+
+            # Reverse back to chronological order and take the most recent 50 unique commands
+            recent = unique_commands[-10:]
+            if recent:
+                prompt += f"\nRecent history of commands:\n<history>\n"
+                for cmd in recent:
+                    prompt += f"{cmd}\n"
+                prompt += f"</history>\n"
+    except (OSError, IOError) as e:
+        # Silently ignore history reading errors
+        pass
+
 
     # Add the actual completion request
     prompt += f"Give the suffix for the following command:\n"
-    prompt += f"{buffer} ->"
+    prompt += f"{buffer}"
 
     return prompt
 
@@ -252,7 +288,6 @@ def main():
 
         buffer = input_data.get('buffer', '')
         cwd = input_data.get('cwd', os.getcwd())
-        history = input_data.get('history', [])
         aliases = input_data.get('aliases', {})
         max_tokens = input_data.get('max_tokens', 16)
 
@@ -264,7 +299,7 @@ def main():
             sys.exit(0)
 
         # Build prompt
-        prompt = build_prompt(buffer, cwd, history, aliases)
+        prompt = build_prompt(buffer, cwd, aliases)
 
         log_debug(f"Prompt: {prompt}")
 
