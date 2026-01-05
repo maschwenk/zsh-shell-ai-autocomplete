@@ -9,7 +9,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 MODEL_PATH="${MODEL_PATH:-$PROJECT_DIR/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf}"
 HOST="${SUGGESTD_HOST:-127.0.0.1}"
 PORT="${SUGGESTD_PORT:-11435}"
-CTX_SIZE="${SUGGESTD_CTX_SIZE:-256}"
+CTX_SIZE="${SUGGESTD_CTX_SIZE:-2048}"
 PARALLEL="${SUGGESTD_PARALLEL:-1}"
 THREADS="${SUGGESTD_THREADS:-6}"
 MAX_TOKENS="${SUGGESTD_MAX_TOKENS:-24}"
@@ -90,7 +90,7 @@ start_daemon() {
         --host "$HOST" \
         --port "$PORT" \
         -m "$MODEL_PATH" \
-        --ctx-size "$CTX_SIZE" \
+        # --ctx-size "$CTX_SIZE" \
         --parallel "$PARALLEL" \
         --threads "$THREADS" \
         --n-gpu-layers 99 \

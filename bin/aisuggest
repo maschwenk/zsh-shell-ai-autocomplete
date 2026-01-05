@@ -77,102 +77,67 @@ def log_debug(msg):
         print(f"[aisuggest DEBUG] {msg}", file=sys.stderr)
 
 
-def load_system_prompt():
-    """Load the system prompt from config file"""
-    try:
-        with open(PROMPT_FILE, 'r') as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        log_debug(f"Prompt file not found: {PROMPT_FILE}")
-        return "You are a shell autosuggestion engine. Output ONLY the continuation suffix. No prose."
 
 
-def build_prompt(buffer, cwd, aliases):
-    """Build the full prompt for the model using a simple completion format"""
-    # Use a minimal, direct pattern that's easier for small models
-    # Just show a few examples and let the model complete the pattern
-
-    prompt = """
-You are a shell command completion assistant. Complete the command by outputting ONLY the suffix text.
-
-CRITICAL: Output ONLY the remaining characters needed to complete the command. Do NOT repeat what's already typed.
-
-Examples:
-Buffer: "git ch"
-Correct output: "eckout"
-Wrong: "git checkout" (don't repeat "git ch")
-
-Buffer: "ls -"
-Correct output: "la"
-Wrong: "-la" (don't repeat the dash)
-
-Buffer: "cd ~/Doc"
-Correct output: "uments"
-Wrong: "cd ~/Documents" (don't repeat buffer)
-
-Buffer: "docker ps"
-Correct output: " -a"
-Wrong: "docker ps -a" (don't repeat buffer)
-
-Buffer: "pnpm -F"
-Correct output: " weaver test"
-Wrong: "pnpm weaver test" (don't repeat buffer)
-
-Output format: Raw text only, no quotes, no explanations, just the suffix.
-"""
-
-    # Add history context from ~/.zsh_history (helps with personalization)
+def build_context_prefix(buffer):
+    """Build context-aware prefix for infill completion"""
+    context = ""
+    
+    # Add recent command history as shell comments for context
     try:
         zsh_history_path = os.path.expanduser("~/.zsh_history")
         if os.path.exists(zsh_history_path):
             with open(zsh_history_path, 'r', encoding='utf-8', errors='ignore') as f:
-                # Read all lines and take the last 1000
-                lines = f.readlines()[-1000:]
+                # Read all lines and take the first 1000
+                lines = f.readlines()[:1000]
 
-            # Parse commands from zsh history format: ":timestamp:duration;command"
+            # Parse commands from zsh history format
             commands = []
             for line in lines:
                 line = line.strip()
                 if line and ';' in line:
-                    # Extract command part (everything after first semicolon)
-                    command = line.split(';', 1)[1]
-                    if command.strip():
+                    command = line.split(';', 1)[1].strip()
+                    # Filter out noise: test commands, long echo commands, etc.
+                    if (command and 
+                        not command.startswith('echo \'{"buffer"') and
+                        not command.startswith('echo ("{buffer"') and
+                        len(command) < 100):  # Skip overly long commands
                         commands.append(command)
 
-            # Deduplicate commands while preserving recency (keep most recent occurrence)
+            # Deduplicate and get most recent unique commands
             seen = set()
             unique_commands = []
-            # Iterate in reverse order (most recent first) to keep latest occurrence
-            for cmd in commands:
+            for cmd in reversed(commands):
                 if cmd not in seen:
                     seen.add(cmd)
-                    unique_commands.append(cmd)
+                    unique_commands.insert(0, cmd)
 
-            # Reverse back to chronological order and take the most recent 50 unique commands
-            recent = unique_commands[-10:]
+            # Take the most recent 5 useful commands for context
+            recent = unique_commands[-5:]
             if recent:
-                prompt += f"\nRecent history of commands:\n<history>\n"
+                # Format as actual shell history to help the model
                 for cmd in recent:
-                    prompt += f"{cmd}\n"
-                prompt += f"</history>\n"
-    except (OSError, IOError) as e:
-        # Silently ignore history reading errors
+                    context += f"{cmd}\n"
+    except (OSError, IOError):
         pass
+    
+    # Add the buffer to complete (on the last line)
+    context += buffer
+    
+    return context
 
 
-    # Add the actual completion request
-    prompt += f"Give the suffix for the following command:\n"
-    prompt += f"{buffer}"
+def call_llama_server(buffer, max_tokens=16, temperature=0.3):
+    """Call llama-server infill API for code completion"""
+    url = f"http://{HOST}:{PORT}/infill"
 
-    return prompt
-
-
-def call_llama_server(prompt, max_tokens=16, temperature=0.3):
-    """Call llama-server completion API"""
-    url = f"http://{HOST}:{PORT}/completion"
+    # Build prefix with context
+    prefix = build_context_prefix(buffer)
+    log_debug(f"Prefix length: {len(prefix)} chars")
 
     payload = {
-        "prompt": prompt,
+        "input_prefix": prefix,
+        "input_suffix": "",
         "n_predict": max_tokens,
         "temperature": temperature,
         "top_p": 0.95,
@@ -191,7 +156,9 @@ def call_llama_server(prompt, max_tokens=16, temperature=0.3):
             result = json.loads(response.read().decode('utf-8'))
             t1 = time.time()
 
-            completion = result.get('content', '').strip()
+            raw_completion = result.get('content', '')
+            log_debug(f"Raw completion: {repr(raw_completion)}")
+            completion = raw_completion.strip()
             log_debug(f"Latency: {(t1-t0)*1000:.0f}ms, Completion: {repr(completion)}")
 
             return completion
@@ -298,15 +265,8 @@ def main():
             log_debug("Buffer too short")
             sys.exit(0)
 
-        # Build prompt
-        prompt = build_prompt(buffer, cwd, aliases)
-
-        log_debug(f"Prompt: {prompt}")
-
-        log_debug(f"Prompt length: {len(prompt)} chars")
-
-        # Call llama-server
-        suggestion = call_llama_server(prompt, max_tokens=max_tokens)
+        # Call llama-server with infill API
+        suggestion = call_llama_server(buffer, max_tokens=max_tokens)
 
         if not suggestion:
             log_debug("No suggestion from model")
