@@ -88,8 +88,8 @@ def build_context_prefix(buffer):
         zsh_history_path = os.path.expanduser("~/.zsh_history")
         if os.path.exists(zsh_history_path):
             with open(zsh_history_path, 'r', encoding='utf-8', errors='ignore') as f:
-                # Read all lines and take the first 1000
-                lines = f.readlines()[:1000]
+                # Read last 2000 lines for better recent command coverage
+                lines = f.readlines()[-2000:]
 
             # Parse commands from zsh history format
             commands = []
@@ -112,8 +112,8 @@ def build_context_prefix(buffer):
                     seen.add(cmd)
                     unique_commands.insert(0, cmd)
 
-            # Take the most recent 5 useful commands for context
-            recent = unique_commands[-5:]
+            # Take the most recent 10 useful commands for context
+            recent = unique_commands[-10:]
             if recent:
                 # Format as actual shell history to help the model
                 for cmd in recent:
