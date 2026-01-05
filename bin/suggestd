@@ -6,7 +6,7 @@ set -euo pipefail
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-MODEL_PATH="${MODEL_PATH:-$PROJECT_DIR/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf}"
+MODEL_PATH="${MODEL_PATH:-$PROJECT_DIR/models/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf}"
 HOST="${SUGGESTD_HOST:-127.0.0.1}"
 PORT="${SUGGESTD_PORT:-11435}"
 CTX_SIZE="${SUGGESTD_CTX_SIZE:-2048}"
