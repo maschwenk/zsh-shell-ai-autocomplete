@@ -21,7 +21,7 @@ PROJECT_DIR = SCRIPT_DIR.parent
 PROMPT_FILE = PROJECT_DIR / "config" / "prompt.txt"
 HOST = os.environ.get("SUGGESTD_HOST", "127.0.0.1")
 PORT = int(os.environ.get("SUGGESTD_PORT", "11435"))
-TIMEOUT = float(os.environ.get("AISUGGEST_TIMEOUT", "0.5"))  # 500ms default
+TIMEOUT = 5.0 # 500ms default
 DEBUG = os.environ.get("DEBUG", "0") == "1"
 
 # Dangerous patterns that should not be suggested unless already in buffer
@@ -72,12 +72,9 @@ DANGEROUS_PATTERNS = [
 
 
 def log_debug(msg):
-    """Log debug message to stderr if DEBUG=1"""
-    if DEBUG:
-        print(f"[aisuggest DEBUG] {msg}", file=sys.stderr)
-
-
-
+    """Append to a tmp file for debugging"""
+    with open("/tmp/aisuggest.log", "a") as f:
+        f.write(f"{msg}\n")
 
 def build_context_prefix(buffer):
     """Build context-aware prefix for infill completion"""
@@ -113,7 +110,7 @@ def build_context_prefix(buffer):
                     unique_commands.insert(0, cmd)
 
             # Take the most recent 10 useful commands for context
-            recent = unique_commands[-100:]
+            recent = unique_commands[-1000:]
             if recent:
                 # Format as actual shell history to help the model
                 for cmd in recent:
