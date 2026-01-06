@@ -113,7 +113,7 @@ def build_context_prefix(buffer):
                     unique_commands.insert(0, cmd)
 
             # Take the most recent 10 useful commands for context
-            recent = unique_commands[-10:]
+            recent = unique_commands[-100:]
             if recent:
                 # Format as actual shell history to help the model
                 for cmd in recent:
