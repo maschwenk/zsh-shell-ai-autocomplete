@@ -13,16 +13,11 @@ import re
 import time
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
-from pathlib import Path
 
 # Configuration
-SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_DIR = SCRIPT_DIR.parent
-PROMPT_FILE = PROJECT_DIR / "config" / "prompt.txt"
 HOST = os.environ.get("SUGGESTD_HOST", "127.0.0.1")
 PORT = int(os.environ.get("SUGGESTD_PORT", "11435"))
-TIMEOUT = 5.0 # 500ms default
-DEBUG = os.environ.get("DEBUG", "0") == "1"
+TIMEOUT = 5.0
 
 # Debouncing configuration
 DEBOUNCE_FILE = os.path.expanduser("~/.cache/aisuggest_debounce")
@@ -291,7 +286,6 @@ def main():
 
         buffer = input_data.get('buffer', '')
         cwd = input_data.get('cwd', os.getcwd())
-        aliases = input_data.get('aliases', {})
         max_tokens = input_data.get('max_tokens', 16)
 
         log_debug(f"Buffer: {repr(buffer)}, CWD: {cwd}")

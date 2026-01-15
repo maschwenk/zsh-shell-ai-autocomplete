@@ -26,8 +26,6 @@ export AISUGGEST_DEBOUNCE="${ZSH_AUTOSUGGEST_AI_DEBOUNCE}"
 # This gets called by zsh-autosuggestions when AI is in the strategy list
 _zsh_autosuggest_strategy_ai() {
     local buffer=$1
-    local -a history_lines
-    local -A aliases_map
     local json_input
 
     # Only suggest for buffers that are long enough

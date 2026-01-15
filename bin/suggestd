@@ -9,7 +9,6 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 MODEL_PATH="${MODEL_PATH:-$PROJECT_DIR/models/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf}"
 HOST="${SUGGESTD_HOST:-127.0.0.1}"
 PORT="${SUGGESTD_PORT:-11435}"
-CTX_SIZE="${SUGGESTD_CTX_SIZE:-2048}"
 PARALLEL="4"
 THREADS="${SUGGESTD_THREADS:-6}"
 MAX_TOKENS="${SUGGESTD_MAX_TOKENS:-24}"
@@ -82,7 +81,7 @@ start_daemon() {
     check_model || return 1
 
     log_info "Starting llama-server on $HOST:$PORT"
-    log_info "Context size: $CTX_SIZE, Max tokens: $MAX_TOKENS"
+    log_info "Max tokens: $MAX_TOKENS"
     log_info "Logs: $LOG_FILE"
 
     # Start llama-server with optimized flags for low memory usage
@@ -98,7 +97,6 @@ start_daemon() {
         --log-disable \
         > "$LOG_FILE" 2>&1 &
 
-        # --ctx-size "$CTX_SIZE"
     local pid=$!
     echo "$pid" > "$PID_FILE"
 
@@ -220,7 +218,6 @@ Environment variables:
     MODEL_PATH          Path to GGUF model file
     SUGGESTD_HOST       Bind address (default: 127.0.0.1)
     SUGGESTD_PORT       Port number (default: 11435)
-    SUGGESTD_CTX_SIZE   Context size (default: 256)
     SUGGESTD_THREADS    Thread count (default: 6)
     SUGGESTD_MAX_TOKENS Max tokens per completion (default: 24)
 
