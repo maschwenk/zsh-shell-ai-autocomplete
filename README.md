@@ -1,3 +1,7 @@
+# Disclaimer
+
+This is some jank ass thing I did. It works for me but it's far from perfect.
+
 # AI-Powered Zsh Autosuggestions
 
 Local, low-latency AI autosuggestions for your shell. Runs entirely on your Mac (Apple Silicon) with <1GB RAM usage.

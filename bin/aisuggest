@@ -24,6 +24,10 @@ PORT = int(os.environ.get("SUGGESTD_PORT", "11435"))
 TIMEOUT = 5.0 # 500ms default
 DEBUG = os.environ.get("DEBUG", "0") == "1"
 
+# Debouncing configuration
+DEBOUNCE_FILE = os.path.expanduser("~/.cache/aisuggest_debounce")
+DEBOUNCE_INTERVAL = 0.05
+
 # Dangerous patterns that should not be suggested unless already in buffer
 DANGEROUS_PATTERNS = [
     # Destructive file operations
@@ -110,7 +114,7 @@ def build_context_prefix(buffer):
                     unique_commands.insert(0, cmd)
 
             # Take the most recent 10 useful commands for context
-            recent = unique_commands[-1000:]
+            recent = unique_commands[-100:]
             if recent:
                 # Format as actual shell history to help the model
                 for cmd in recent:
@@ -244,11 +248,46 @@ def is_safe_suggestion(buffer, suggestion):
     return True
 
 
+def check_debounce():
+    """Check if enough time has passed since last request"""
+    current_time = time.time()
+
+    if os.path.exists(DEBOUNCE_FILE):
+        try:
+            with open(DEBOUNCE_FILE, 'r') as f:
+                last_request = float(f.read().strip())
+            elapsed = current_time - last_request
+            if elapsed < DEBOUNCE_INTERVAL:
+                log_debug(f"Debounced: {elapsed*1000:.0f}ms < {DEBOUNCE_INTERVAL*1000:.0f}ms")
+                return False  # Too soon, skip
+        except (IOError, ValueError, OSError):
+            pass  # If file is corrupted, proceed
+
+    # Update debounce timestamp atomically
+    try:
+        # Create cache dir if it doesn't exist
+        os.makedirs(os.path.dirname(DEBOUNCE_FILE), exist_ok=True)
+
+        # Write to temp file then rename (atomic)
+        temp_file = f"{DEBOUNCE_FILE}.tmp.{os.getpid()}"
+        with open(temp_file, 'w') as f:
+            f.write(str(current_time))
+        os.rename(temp_file, DEBOUNCE_FILE)
+    except (IOError, OSError):
+        pass  # Proceed even if write fails
+
+    return True
+
+
 def main():
     """Main entry point"""
     try:
         # Read JSON input from stdin
         input_data = json.loads(sys.stdin.read())
+
+        # Debounce check - exit early if too soon since last request
+        if not check_debounce():
+            sys.exit(0)
 
         buffer = input_data.get('buffer', '')
         cwd = input_data.get('cwd', os.getcwd())

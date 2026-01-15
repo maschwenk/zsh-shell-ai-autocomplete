@@ -16,9 +16,11 @@
 : ${ZSH_AUTOSUGGEST_AI_HISTORY_SIZE:=20}
 : ${ZSH_AUTOSUGGEST_AI_MAX_TOKENS:=512}
 : ${ZSH_AUTOSUGGEST_AI_TIMEOUT:=0.5}
+: ${ZSH_AUTOSUGGEST_AI_DEBOUNCE:=0.15}
 
-# Export timeout for aisuggest
+# Export settings for aisuggest
 export AISUGGEST_TIMEOUT="${ZSH_AUTOSUGGEST_AI_TIMEOUT}"
+export AISUGGEST_DEBOUNCE="${ZSH_AUTOSUGGEST_AI_DEBOUNCE}"
 
 # AI strategy function
 # This gets called by zsh-autosuggestions when AI is in the strategy list
